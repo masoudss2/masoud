@@ -1,33 +1,4 @@
-from flask import Flask
-import threading
-import os
-from telegram.ext import ApplicationBuilder
 
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Bot is running!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
-
-async def start_bot():
-    TOKEN = os.getenv("TELEGRAM_TOKEN")
-    application = ApplicationBuilder().token(TOKEN).build()
-
-    # اضافه کن handlerها و منطق ربات خودت رو اینجا
-
-    await application.run_polling()
-
-if __name__ == "__main__":
-    # اجرای وب سرور در یک Thread جدا
-    threading.Thread(target=run_flask).start()
-
-    # اجرای ربات تلگرام (async)
-    import asyncio
-    asyncio.run(start_bot())
 import os
 import logging
 import signal
@@ -1040,4 +1011,47 @@ def run_bot():
         sys.exit(1)
 
 if __name__ == "__main__":    run_bot()
+import os
+import threading
+import asyncio
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    # پورت رو از محیط بگیر (این برای Render خیلی مهمه)
+    port = int(os.getenv("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+async def start_bot():
+    # اینجا همون بخشیه که رباتت رو اجرا می‌کنی
+    from telegram.ext import ApplicationBuilder
+    TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+    # اگر TOKEN موجود نباشه، یه پیام بده
+    if not TOKEN:
+        print("ERROR: TELEGRAM_TOKEN is not set.")
+        return
+
+    # ساخت ربات
+    application = ApplicationBuilder().token(TOKEN).build()
+
+    # اینجا هندلرها رو اضافه کن
+    # مثلا:
+    # application.add_handler(...)
+
+    # اجرای ربات
+    await application.run_polling()
+
+if __name__ == "__main__":
+    # اول وب‌سرور Flask رو تو یه Thread جدید اجرا کن
+    threading.Thread(target=run_flask).start()
+
+    # بعد ربات تلگرام رو اجرا کن
+    asyncio.run(start_bot())
+
  
