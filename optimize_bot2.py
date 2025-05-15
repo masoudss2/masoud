@@ -1,9 +1,4 @@
 import os
-
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-print("Loaded TOKEN: ", TOKEN)  # برای نمایش توکن در لاگ‌ها
-
-import os
 import logging
 import signal
 import sys
@@ -476,20 +471,27 @@ async def set_knowledge_level(update: Update, context: ContextTypes.DEFAULT_TYPE
     level = query.data.split("_")[1]
     context.user_data["knowledge_level"] = level
     
-    await query.edit_message_text(
-        f"✅ سطح دانش شما به {level} تنظیم شد!\n\n"
-        "اکنون می‌توانید سوالات خود را مطرح کنید یا فایل Excel یا PDF صورت مالی خود را ارسال کنید.\n\n"
-        "**دستورات اصلی:**\n"
-        "/news [کلمات کلیدی] - دریافت آخرین اخبار مالی\n"
-        "/stock [نماد] - دریافت اطلاعات و تحلیل سهام\n"
-        "/market - خلاصه وضعیت بازار\n"
-        "/help - نمایش راهنمای کامل\n\n"
-        "**دستورات بورس ایران:**\n"
-        "• /iran_market - مشاهده وضعیت کلی بازار\n"
-        "• /iran_stock [نماد] - تحلیل سهام بورس ایران (مثال: /iran_stock خودرو)\n"
-        "• /codal [نماد] - گزارش‌های کدال",
-        parse_mode="Markdown"
-    )
+    # تغییر فرمت پیام برای جلوگیری از خطای پارس کردن
+    level_names = {
+        "beginner": "مبتدی",
+        "intermediate": "متوسط",
+        "pro": "حرفه‌ای"
+    }
+    
+    message_text = f"✅ سطح دانش شما به {level_names.get(level, level)} تنظیم شد!\n\n"
+    message_text += "اکنون می‌توانید سوالات خود را مطرح کنید یا فایل Excel یا PDF صورت مالی خود را ارسال کنید.\n\n"
+    message_text += "دستورات اصلی:\n"
+    message_text += "/news [کلمات کلیدی] - دریافت آخرین اخبار مالی\n"
+    message_text += "/stock [نماد] - دریافت اطلاعات و تحلیل سهام\n"
+    message_text += "/market - خلاصه وضعیت بازار\n"
+    message_text += "/help - نمایش راهنمای کامل\n\n"
+    message_text += "دستورات بورس ایران:\n"
+    message_text += "• /iran_market - مشاهده وضعیت کلی بازار\n"
+    message_text += "• /iran_stock [نماد] - تحلیل سهام بورس ایران (مثال: /iran_stock خودرو)\n"
+    message_text += "• /codal [نماد] - گزارش‌های کدال"
+    
+    await query.edit_message_text(message_text)
+
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Process text queries with level-appropriate responses"""
@@ -533,6 +535,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("👎 مفید نبود", callback_data="feedback_bad")
         ]])
     )
+
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Process PDF and Excel financial documents"""
@@ -657,8 +660,8 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ خطا در دریافت اخبار. لطفاً بعداً تلاش کنید.")
         return
     
-    # Format news as markdown
-    news_text = "📰 **آخرین اخبار مالی**\n\n"
+    # Format news without markdown
+    news_text = "📰 آخرین اخبار مالی\n\n"
     for item in news:
         sentiment_emoji = "😐"
         if item["sentiment"] == "positive":
@@ -666,11 +669,12 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif item["sentiment"] == "negative":
             sentiment_emoji = "🔴"
             
-        news_text += f"*{item['title']}* {sentiment_emoji}\n"
+        news_text += f"{item['title']} {sentiment_emoji}\n"
         news_text += f"{item['summary']}\n"
-        news_text += f"[مشاهده کامل خبر]({item['url']})\n\n"
+        news_text += f"لینک خبر: {item['url']}\n\n"
     
-    await update.message.reply_text(news_text, parse_mode="Markdown", disable_web_page_preview=True)
+    await update.message.reply_text(news_text, disable_web_page_preview=True)
+
 
 async def get_stock_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fetch and analyze stock information"""
@@ -691,13 +695,13 @@ async def get_stock_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     profile = stock_data["profile"]
     ratios = stock_data["ratios"]
     
-    info_text = f"📈 **اطلاعات سهام {symbol}**\n\n"
-    info_text += f"**{profile.get('companyName', 'N/A')}**\n"
+    info_text = f"📈 اطلاعات سهام {symbol}\n\n"
+    info_text += f"{profile.get('companyName', 'N/A')}\n"
     info_text += f"قیمت: ${profile.get('price', 'N/A')}\n"
     info_text += f"تغییر: {profile.get('changes', 'N/A')} ({profile.get('changesPercentage', 'N/A')}%)\n"
     info_text += f"صنعت: {profile.get('industry', 'N/A')}\n\n"
     
-    info_text += "**نسبت‌های مالی:**\n"
+    info_text += "نسبت‌های مالی:\n"
     if ratios:
         info_text += f"P/E: {ratios.get('priceEarningsRatio', 'N/A')}\n"
         info_text += f"P/B: {ratios.get('priceToBookRatio', 'N/A')}\n"
@@ -728,9 +732,10 @@ async def get_stock_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     
     analysis = query_deepseek(normalize_prompt(analysis_prompt), use_reasoner=True)
-    info_text += f"\n**تحلیل هوشمند:**\n{analysis}"
+    info_text += f"\nتحلیل هوشمند:\n{analysis}"
     
-    await update.message.reply_text(info_text, parse_mode="Markdown")
+    await update.message.reply_text(info_text)
+
 
 async def market_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Provide a summary of current market conditions"""
@@ -763,22 +768,22 @@ async def market_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         losers_data = losers_response.json()[:5]  # Top 5 losers
         
         # Format market summary
-        summary_text = "🌐 **خلاصه وضعیت بازار**\n\n"
+        summary_text = "🌐 خلاصه وضعیت بازار\n\n"
         
         # Add indices
-        summary_text += "**شاخص‌های اصلی:**\n"
+        summary_text += "شاخص‌های اصلی:\n"
         for name, data in indices_data.items():
             profile = data.get("profile", {})
             summary_text += f"{name}: ${profile.get('price', 'N/A')} ({profile.get('changesPercentage', 'N/A')}%)\n"
         
         # Add gainers
-        summary_text += "\n**بیشترین رشد:**\n"
+        summary_text += "\nبیشترین رشد:\n"
         for item in gainers_data:
             summary_text += f"{item.get('symbol', 'N/A')} ({item.get('companyName', 'N/A')}): "
             summary_text += f"${item.get('price', 'N/A')} ({item.get('changesPercentage', 'N/A')}%)\n"
         
         # Add losers
-        summary_text += "\n**بیشترین افت:**\n"
+        summary_text += "\nبیشترین افت:\n"
         for item in losers_data:
             summary_text += f"{item.get('symbol', 'N/A')} ({item.get('companyName', 'N/A')}): "
             summary_text += f"${item.get('price', 'N/A')} ({item.get('changesPercentage', 'N/A')}%)\n"
@@ -800,45 +805,44 @@ async def market_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         
         market_analysis = query_deepseek(normalize_prompt(market_prompt), use_reasoner=True)
-        summary_text += f"\n**تحلیل بازار:**\n{market_analysis}"
+        summary_text += f"\nتحلیل بازار:\n{market_analysis}"
         
-        await update.message.reply_text(summary_text, parse_mode="Markdown")
+        await update.message.reply_text(summary_text)
         
     except Exception as e:
         logger.error(f"Market summary error: {e}")
         await update.message.reply_text(f"❌ خطا در دریافت خلاصه بازار: {str(e)}")
 
+
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Display help information"""
-    help_text = """🤖 **راهنمای ربات تحلیل مالی**
-
-**دستورات اصلی:**
-/start - شروع کار با ربات و انتخاب سطح دانش
-/help - نمایش این راهنما
-/news [کلمات کلیدی] - دریافت آخرین اخبار مالی
-/stock [نماد] - دریافت اطلاعات و تحلیل سهام
-/market - خلاصه وضعیت بازار
-
-**دستورات بورس ایران:**
-/iran_market - وضعیت کلی بازار بورس ایران
-/iran_stock [نماد] - تحلیل سهام بورس ایران (مثال: /iran_stock خودرو)
-/codal [نماد] - دریافت گزارش‌های کدال یک شرکت (مثال: /codal خودرو)
-
-**قابلیت‌های ربات:**
-• پاسخ به سوالات مالی با توجه به سطح دانش شما
-• تحلیل فایل‌های PDF صورت‌های مالی
-• تحلیل فایل‌های Excel داده‌های مالی
-• دریافت اخبار مالی جهانی
-• تحلیل سهام و بازارهای جهانی
-• دریافت اطلاعات بازار بورس ایران
-• تحلیل سهام بورس ایران
-• دسترسی به گزارش‌های کدال
-
-برای استفاده از قابلیت تحلیل فایل، کافیست فایل PDF یا Excel خود را ارسال کنید.
-برای پرسش سوالات مالی، متن سوال خود را بنویسید.
-    """
+    help_text = "🤖 راهنمای ربات تحلیل مالی\n\n"
+    help_text += "دستورات اصلی:\n"
+    help_text += "/start - شروع کار با ربات و انتخاب سطح دانش\n"
+    help_text += "/help - نمایش این راهنما\n"
+    help_text += "/news [کلمات کلیدی] - دریافت آخرین اخبار مالی\n"
+    help_text += "/stock [نماد] - دریافت اطلاعات و تحلیل سهام\n"
+    help_text += "/market - خلاصه وضعیت بازار\n\n"
+    help_text += "دستورات بورس ایران:\n"
+    help_text += "/iran_market - وضعیت کلی بازار بورس ایران\n"
+    help_text += "/iran_stock [نماد] - تحلیل سهام بورس ایران (مثال: /iran_stock خودرو)\n"
+    help_text += "/codal [نماد] - دریافت گزارش‌های کدال یک شرکت (مثال: /codal خودرو)\n\n"
+    help_text += "قابلیت‌های ربات:\n"
+    help_text += "• پاسخ به سوالات مالی با توجه به سطح دانش شما\n"
+    help_text += "• تحلیل فایل‌های PDF صورت‌های مالی\n"
+    help_text += "• تحلیل فایل‌های Excel داده‌های مالی\n"
+    help_text += "• دریافت اخبار مالی جهانی\n"
+    help_text += "• تحلیل سهام و بازارهای جهانی\n"
+    help_text += "• دریافت اطلاعات بازار بورس ایران\n"
+    help_text += "• تحلیل سهام بورس ایران\n"
+    help_text += "• دسترسی به گزارش‌های کدال\n\n"
+    help_text += "برای استفاده از قابلیت تحلیل فایل، کافیست فایل PDF یا Excel خود را ارسال کنید.\n"
+    help_text += "برای پرسش سوالات مالی، متن سوال خود را بنویسید."
     
-    await update.message.reply_text(help_text, parse_mode="Markdown")
+    await update.message.reply_text(help_text)
+
 
 async def iran_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """نمایش وضعیت کلی بازار بورس ایران"""
@@ -848,25 +852,23 @@ async def iran_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # دریافت داده‌های ساختگی بازار
         market_data = get_iran_market_data()
         
-        response = f"""📊 **وضعیت بازار بورس ایران**
+        response = f"📊 وضعیت بازار بورس ایران\n\n"
+        response += f"🕒 زمان: {market_data['timestamp']}\n"
+        response += f"🏛 وضعیت بازار: {market_data['market_status']}\n"
+        response += f"📈 شاخص کل: {market_data['overall_index']}\n"
+        response += f"💰 ارزش بازار: {market_data['market_value']}\n"
+        response += f"📊 حجم معاملات: {market_data['trade_volume']}\n"
+        response += f"🔄 روند کلی بازار: {market_data['market_trend']}\n\n"
+        response += f"وضعیت نمادها:\n"
+        response += f"🟢 نمادهای مثبت: {market_data['positive_symbols']}\n"
+        response += f"🔴 نمادهای منفی: {market_data['negative_symbols']}\n"
+        response += f"⚪ نمادهای بدون تغییر: {market_data['neutral_symbols']}\n"
         
-🕒 زمان: {market_data['timestamp']}
-🏛 وضعیت بازار: {market_data['market_status']}
-📈 شاخص کل: {market_data['overall_index']}
-💰 ارزش بازار: {market_data['market_value']}
-📊 حجم معاملات: {market_data['trade_volume']}
-🔄 روند کلی بازار: {market_data['market_trend']}
-
-**وضعیت نمادها:**
-🟢 نمادهای مثبت: {market_data['positive_symbols']}
-🔴 نمادهای منفی: {market_data['negative_symbols']}
-⚪ نمادهای بدون تغییر: {market_data['neutral_symbols']}
-"""
-        
-        await update.message.reply_text(response, parse_mode="Markdown")
+        await update.message.reply_text(response)
     except Exception as e:
         logger.error(f"خطا در اجرای دستور iran_market: {e}")
         await update.message.reply_text("❌ خطا در دریافت اطلاعات بازار. لطفاً بعداً تلاش کنید.")
+
 async def iran_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تحلیل سهام بورس ایران"""
     try:
@@ -881,22 +883,20 @@ async def iran_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stock_data = get_iran_stock_data(symbol)
         
         # ساخت متن تاریخچه
-        history_text = "\n📅 **تاریخچه قیمت (7 روز اخیر)**:\n"
+        history_text = "\n📅 تاریخچه قیمت (7 روز اخیر):\n"
         for item in stock_data["history"]:
             history_text += f"- {item['date']}: {item['close_price']} (حجم: {item['volume']})\n"
         
-        response = f"""🔍 **اطلاعات سهام {stock_data['symbol']}**
-        
-📝 نام کامل: {stock_data['full_name']}
-💰 قیمت: {stock_data['price']} ریال
-📊 تغییرات: {stock_data['change_percent']}
-🏭 صنعت: {stock_data['industry']}
-💼 ارزش بازار: {stock_data['market_cap']}
-📈 نسبت P/E: {stock_data['p/e']}
-💵 EPS: {stock_data['eps']} ریال
-🕒 زمان: {stock_data['timestamp']}
-{history_text}
-"""
+        response = f"🔍 اطلاعات سهام {stock_data['symbol']}\n\n"
+        response += f"📝 نام کامل: {stock_data['full_name']}\n"
+        response += f"💰 قیمت: {stock_data['price']} ریال\n"
+        response += f"📊 تغییرات: {stock_data['change_percent']}\n"
+        response += f"🏭 صنعت: {stock_data['industry']}\n"
+        response += f"💼 ارزش بازار: {stock_data['market_cap']}\n"
+        response += f"📈 نسبت P/E: {stock_data['p/e']}\n"
+        response += f"💵 EPS: {stock_data['eps']} ریال\n"
+        response += f"🕒 زمان: {stock_data['timestamp']}\n"
+        response += history_text
         
         # تحلیل هوشمند با استفاده از AI
         analysis_prompt = f"""
@@ -918,12 +918,13 @@ async def iran_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         
         analysis = query_deepseek(normalize_prompt(analysis_prompt), use_reasoner=True)
-        response += f"\n**تحلیل هوشمند:**\n{analysis}"
+        response += f"\nتحلیل هوشمند:\n{analysis}"
         
-        await update.message.reply_text(response, parse_mode="Markdown")
+        await update.message.reply_text(response)
     except Exception as e:
         logger.error(f"خطا در اجرای دستور iran_stock: {e}")
         await update.message.reply_text("❌ خطا در دریافت اطلاعات سهام. لطفاً بعداً تلاش کنید.")
+
 
 async def codal_reports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """دریافت گزارش‌های کدال برای یک شرکت"""
@@ -938,21 +939,19 @@ async def codal_reports_command(update: Update, context: ContextTypes.DEFAULT_TY
         # دریافت داده‌های ساختگی گزارش‌های کدال
         codal_data = get_codal_reports(symbol)
         
-        response = f"""📑 **گزارش‌های کدال برای {codal_data['company_name']} ({codal_data['symbol']})**
-        
-تعداد گزارش‌های یافت شده: {len(codal_data['reports'])}
-        
-**گزارش‌های اخیر:**
-"""
+        response = f"📑 گزارش‌های کدال برای {codal_data['company_name']} ({codal_data['symbol']})\n\n"
+        response += f"تعداد گزارش‌های یافت شده: {len(codal_data['reports'])}\n\n"
+        response += "گزارش‌های اخیر:\n"
         
         for i, report in enumerate(codal_data['reports'], 1):
             response += f"{i}. {report['date']} - {report['title']} ({report['category']})\n"
-            response += f"   [مشاهده گزارش]({report['url']})\n"
+            response += f"   لینک گزارش: {report['url']}\n"
         
-        await update.message.reply_text(response, parse_mode="Markdown", disable_web_page_preview=True)
+        await update.message.reply_text(response)
     except Exception as e:
         logger.error(f"خطا در اجرای دستور codal: {e}")
         await update.message.reply_text("❌ خطا در دریافت گزارش‌های کدال. لطفاً بعداً تلاش کنید.")
+
 
 # --- Main Execution ---
 def run_bot():
