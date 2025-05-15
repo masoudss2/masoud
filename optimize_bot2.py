@@ -159,14 +159,14 @@ ai_cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL)
 
 @cached(cache=ai_cache)
 def query_deepseek(prompt: str, use_reasoner: bool = False) -> str:
-    """Get AI response with TTL caching"""
+    """Get AI response with TTL caching and improved error handling"""
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
         "Content-Type": "application/json"
     }
     
     # انتخاب مدل بر اساس پیچیدگی درخواست
-    model = "deepseek-reasoner" if use_reasoner else "deepseek-chat"
+    model = "deepseek-chat" # همیشه از مدل deepseek-chat استفاده کنیم
     
     payload = {
         "model": model,
@@ -175,13 +175,25 @@ def query_deepseek(prompt: str, use_reasoner: bool = False) -> str:
         "max_tokens": 500
     }
     
-    try:
-        response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=10)
-        response.raise_for_status()
-        return response.json()['choices'][0]['message']['content']
-    except Exception as e:
-        logger.error(f"API Error: {e}")
-        return "⚠ خطا در پردازش درخواست. لطفاً بعداً تلاش کنید."
+    # تعداد تلاش‌های مجدد
+    max_retries = 3
+    
+    for retry in range(max_retries):
+        try:
+            # افزایش timeout به 60 ثانیه
+            response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            return response.json()['choices'][0]['message']['content']
+        except Exception as e:
+            logger.error(f"API Error (attempt {retry+1}/{max_retries}): {e}")
+            if retry < max_retries - 1:
+                # انتظار قبل از تلاش مجدد
+                wait_time = 3 * (retry + 1)  # 3, 6, 9 ثانیه
+                logger.info(f"Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+            else:
+                return "⚠ خطا در ارتباط با سرور هوش مصنوعی. لطفاً دوباره تلاش کنید."
+
 
     # --- Financial API Integration ---
 @cached(cache=news_cache)
@@ -958,6 +970,11 @@ def run_bot():
     """Configure and run the bot"""
     try:
         print(f"Attempting to create bot with token: {TELEGRAM_TOKEN[:5]}...")
+        
+        # تست اتصال به دیپ‌سیک
+        if not test_deepseek_connection():
+            print("⚠ هشدار: اتصال به API دیپ‌سیک با مشکل مواجه شد. ربات با قابلیت‌های محدود اجرا می‌شود.")
+        
         application = Application.builder().token(TELEGRAM_TOKEN).build()
         
         # Add handlers
