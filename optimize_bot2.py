@@ -971,10 +971,6 @@ def run_bot():
     try:
         print(f"Attempting to create bot with token: {TELEGRAM_TOKEN[:5]}...")
         
-        # تست اتصال به دیپ‌سیک
-        if not test_deepseek_connection():
-            print("⚠ هشدار: اتصال به API دیپ‌سیک با مشکل مواجه شد. ربات با قابلیت‌های محدود اجرا می‌شود.")
-        
         application = Application.builder().token(TELEGRAM_TOKEN).build()
         
         # Add handlers
