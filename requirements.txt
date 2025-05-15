@@ -9,4 +9,5 @@ cryptography
 yfinance
 langdetect
 openpyxl
-sqlite3
+
+
