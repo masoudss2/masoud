@@ -10,7 +10,8 @@ from typing import Optional, Dict, Any, List
 import json
 from datetime import datetime, timedelta
 import random  # برای تولید داده‌های ساختگی
-
+import threading  # اضافه کردن این خط
+from flask import Flask  # type: ignore
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -29,6 +30,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from cachetools import TTLCache, cached
 import traceback
+# ایجاد یک برنامه Flask
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "ربات تلگرام در حال اجراست!"
+
+@app.route('/health')
+def health():
+    return "OK"
 
 
 # --- Configuration ---
@@ -1079,48 +1090,12 @@ def run_bot():
         print(f"Error starting bot: {e}")
         sys.exit(1)
 
-if __name__ == "__main__":    run_bot()
-import os
-import threading
-import asyncio
-from flask import Flask
-
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Bot is running!"
-
-def run_flask():
-    # پورت رو از محیط بگیر (این برای Render خیلی مهمه)
-    port = int(os.getenv("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
-
-async def start_bot():
-    # اینجا همون بخشیه که رباتت رو اجرا می‌کنی
-    from telegram.ext import ApplicationBuilder
-    TOKEN = os.getenv("TELEGRAM_TOKEN")
-
-    # اگر TOKEN موجود نباشه، یه پیام بده
-    if not TOKEN:
-        print("ERROR: TELEGRAM_TOKEN is not set.")
-        return
-
-    # ساخت ربات
-    application = ApplicationBuilder().token(TOKEN).build()
-
-    # اینجا هندلرها رو اضافه کن
-    # مثلا:
-    # application.add_handler(...)
-
-    # اجرای ربات
-    await application.run_polling()
-
 if __name__ == "__main__":
-    # اول وب‌سرور Flask رو تو یه Thread جدید اجرا کن
-    threading.Thread(target=run_flask).start()
-
-    # بعد ربات تلگرام رو اجرا کن
-    asyncio.run(start_bot())
-
- 
+    # اجرای ربات تلگرام در یک thread جداگانه
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # اجرای وب سرور Flask
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
