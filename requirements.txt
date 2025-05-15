@@ -10,4 +10,4 @@ yfinance
 langdetect
 openpyxl
 cachetools
-flask==2.3.3
+
