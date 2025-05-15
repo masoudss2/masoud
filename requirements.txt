@@ -9,5 +9,4 @@ cryptography
 yfinance
 langdetect
 openpyxl
-
-
+cachetools
