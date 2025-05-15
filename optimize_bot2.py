@@ -1,4 +1,3 @@
-
 import os
 import logging
 import signal
@@ -10,8 +9,7 @@ from typing import Optional, Dict, Any, List
 import json
 from datetime import datetime, timedelta
 import random  # برای تولید داده‌های ساختگی
-import threading  # اضافه کردن این خط
-from flask import Flask  # type: ignore
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -30,22 +28,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from cachetools import TTLCache, cached
 import traceback
-# ایجاد یک برنامه Flask
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "ربات تلگرام در حال اجراست!"
-
-@app.route('/health')
-def health():
-    return "OK"
 
 
 # --- Configuration ---
 # تنظیم مستقیم متغیرها بدون استفاده از فایل .env
-# تنظیم متغیرها با اولویت متغیرهای محیطی
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "7429551898:AAF0BnBcQwNmi7IRA3PPVNf-K-4On2JROgs")
+TELEGRAM_TOKEN = "7429551898:AAF0BnBcQwNmi7IRA3PPVNf-K-4On2JROgs"  # توکن تلگرام خود را اینجا قرار دهید
 DEEPSEEK_API_KEY = "sk-033cc340ba3247f7931a64c5e3d77330"  # کلید API دیپ‌سیک خود را اینجا قرار دهید
 ALPHA_VANTAGE_API_KEY = "8RD7DN1R2W5AI9UT"  # کلید API آلفا ونتیج خود را اینجا قرار دهید
 FINANCIAL_MODELING_PREP_API_KEY = "jBxtfLbURIAQQnzoQlL1ywKM72hrbAZT"  # کلید API فایننشال مادلینگ پرپ خود را اینجا قرار دهید
@@ -227,7 +214,7 @@ def get_financial_news(keywords: str = "", limit: int = 10) -> list:
         data = response.json()
         
         if "feed" not in data:
-            return [{"title": "خطا در دریافت اخبار", "url": "", "summary": "", "sentiment": "neutral"}]
+            return [{"title": "خطا در دریافت اخبار", "url": ""}]
         
         news_items = []
         for item in data["feed"][:limit]:
@@ -236,14 +223,13 @@ def get_financial_news(keywords: str = "", limit: int = 10) -> list:
                 "summary": item.get("summary", "")[:100] + "...",
                 "url": item.get("url", ""),
                 "time_published": item.get("time_published", ""),
-                "sentiment": item.get("overall_sentiment_label", "neutral")  # استفاده از get با مقدار پیش‌فرض
+                "sentiment": item.get("overall_sentiment_label", "neutral")
             })
         
         return news_items
     except Exception as e:
         logger.error(f"Financial news API error: {e}")
-        return [{"title": f"خطا در دریافت اخبار: {str(e)}", "url": "", "summary": "", "sentiment": "neutral"}]
-
+        return [{"title": f"خطا در دریافت اخبار: {str(e)}", "url": ""}]
 
 @cached(cache=stock_cache)
 def get_stock_data(symbol: str) -> dict:
@@ -675,7 +661,7 @@ async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("🙏 از بازخورد شما متشکریم!")
 
 async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fetch and send financial news with AI analysis"""
+    """Fetch and send financial news"""
     keywords = " ".join(context.args) if context.args else ""
     
     await update.message.reply_text("⏳ در حال دریافت اخبار مالی...")
@@ -686,86 +672,20 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ خطا در دریافت اخبار. لطفاً بعداً تلاش کنید.")
         return
     
-    # ذخیره اخبار در context برای استفاده در تحلیل عمیق‌تر
-    context.user_data["latest_news"] = news
-    context.user_data["news_keywords"] = keywords
-    
-    # Format news as markdown
-    news_text = "📰 **آخرین اخبار مالی**\n\n"
+    # Format news without markdown
+    news_text = "📰 آخرین اخبار مالی\n\n"
     for item in news:
         sentiment_emoji = "😐"
-        if item.get("sentiment") == "positive":
+        if item["sentiment"] == "positive":
             sentiment_emoji = "🟢"
-        elif item.get("sentiment") == "negative":
+        elif item["sentiment"] == "negative":
             sentiment_emoji = "🔴"
             
-        news_text += f"*{item['title']}* {sentiment_emoji}\n"
+        news_text += f"{item['title']} {sentiment_emoji}\n"
         news_text += f"{item['summary']}\n"
-        news_text += f"[مشاهده کامل خبر]({item['url']})\n\n"
+        news_text += f"لینک خبر: {item['url']}\n\n"
     
-    # ایجاد دکمه برای درخواست تحلیل
-    keyboard = [
-        [InlineKeyboardButton("🧠 تحلیل هوشمند اخبار", callback_data="analyze_news")]
-    ]
-    
-    await update.message.reply_text(
-        news_text, 
-        parse_mode="Markdown", 
-        disable_web_page_preview=True,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def analyze_news_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle request for AI analysis of news"""
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_reply_markup(None)  # حذف دکمه
-    
-    # دریافت اخبار ذخیره شده
-    news = context.user_data.get("latest_news", [])
-    keywords = context.user_data.get("news_keywords", "")
-    
-    if not news:
-        await query.message.reply_text("❌ اخبار برای تحلیل در دسترس نیست. لطفاً دوباره دستور /news را اجرا کنید.")
-        return
-    
-    await query.message.reply_text("⏳ در حال تحلیل اخبار توسط هوش مصنوعی...")
-    
-    # ساخت متن خلاصه اخبار برای تحلیل
-    news_summary_for_ai = ""
-    for item in news:
-        news_summary_for_ai += f"عنوان: {item['title']}\n"
-        news_summary_for_ai += f"خلاصه: {item['summary']}\n"
-        news_summary_for_ai += f"احساس: {item.get('sentiment', 'neutral')}\n\n"
-    
-    # درخواست تحلیل از هوش مصنوعی
-    analysis_prompt = f"""
-    لطفاً اخبار مالی زیر را به طور دقیق تحلیل کنید:
-    
-    {news_summary_for_ai}
-    
-    در تحلیل خود به موارد زیر بپردازید:
-    1. روندهای کلیدی و الگوهای مشترک در اخبار
-    2. تأثیرات احتمالی این اخبار بر بازارهای مالی
-    3. فرصت‌ها یا ریسک‌های سرمایه‌گذاری که از این اخبار نتیجه می‌شود
-    4. توصیه‌های کلی برای سرمایه‌گذاران با توجه به این اخبار
-    
-    کلمات کلیدی جستجو: {keywords if keywords else "عمومی"}
-    """
-    
-    try:
-        # ارسال درخواست به دیپ‌سیک
-        ai_analysis = query_deepseek(normalize_prompt(analysis_prompt), use_reasoner=True)
-        
-        # ارسال تحلیل به کاربر
-        analysis_text = "🧠 **تحلیل هوشمند اخبار مالی**\n\n"
-        analysis_text += ai_analysis
-        
-        await query.message.reply_text(analysis_text, parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"Error getting AI analysis: {e}")
-        await query.message.reply_text("❌ خطا در دریافت تحلیل هوشمند. لطفاً بعداً تلاش کنید.")
+    await update.message.reply_text(news_text, disable_web_page_preview=True)
 
 
 async def get_stock_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1051,6 +971,10 @@ def run_bot():
     try:
         print(f"Attempting to create bot with token: {TELEGRAM_TOKEN[:5]}...")
         
+        # تست اتصال به دیپ‌سیک
+        if not test_deepseek_connection():
+            print("⚠ هشدار: اتصال به API دیپ‌سیک با مشکل مواجه شد. ربات با قابلیت‌های محدود اجرا می‌شود.")
+        
         application = Application.builder().token(TELEGRAM_TOKEN).build()
         
         # Add handlers
@@ -1059,7 +983,6 @@ def run_bot():
         application.add_handler(CommandHandler("news", get_news))
         application.add_handler(CommandHandler("stock", get_stock_info))
         application.add_handler(CommandHandler("market", market_summary))
-        
         
         # دستورات بورس ایران با هر دو فرمت
         application.add_handler(CommandHandler("iran_market", iran_market))
@@ -1073,7 +996,6 @@ def run_bot():
         # سایر هندلرها
         application.add_handler(CallbackQueryHandler(set_knowledge_level, pattern="^level_"))
         application.add_handler(CallbackQueryHandler(handle_feedback, pattern="^feedback_"))
-        application.add_handler(CallbackQueryHandler(analyze_news_callback, pattern="^analyze_news$"))
         application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
         
@@ -1091,12 +1013,5 @@ def run_bot():
         print(f"Error starting bot: {e}")
         sys.exit(1)
 
-if __name__ == "__main__":
-    # اجرای ربات تلگرام در یک thread جداگانه
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    # اجرای وب سرور Flask
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+if __name__ == "__main__":    run_bot()
+ 
