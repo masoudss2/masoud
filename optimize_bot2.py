@@ -3,6 +3,7 @@ import logging
 import signal
 import sys
 import time
+import asyncio
 from functools import lru_cache
 from io import BytesIO
 from typing import Optional, Dict, Any, List
@@ -80,6 +81,146 @@ def decrypt_data(encrypted_data: str) -> str:
 def normalize_prompt(prompt: str) -> str:
     """Standardize prompts for effective caching"""
     return prompt.strip().replace("\n", " ").replace("  ", " ")
+# --- مدیریت تاریخچه مکالمات ---
+def initialize_user_history(user_id, context):
+    """برای کاربر جدید تاریخچه مکالمه ایجاد می‌کند"""
+    if 'conversations' not in context.user_data:
+        context.user_data['conversations'] = {
+            'history': [],  # تاریخچه مکالمات
+            'last_command': None,  # آخرین دستور اجرا شده
+            'last_context': {},  # اطلاعات مرتبط با آخرین دستور
+            'knowledge_level': 'beginner'  # سطح دانش پیش‌فرض
+        }
+    return context.user_data['conversations']
+
+def add_to_history(user_id, context, role, content, command=None):
+    """افزودن یک پیام به تاریخچه مکالمات کاربر"""
+    conv = initialize_user_history(user_id, context)
+    
+    # محدود کردن تعداد پیام‌های ذخیره شده (برای جلوگیری از مصرف زیاد حافظه)
+    MAX_HISTORY = 20
+    if len(conv['history']) >= MAX_HISTORY:
+        conv['history'] = conv['history'][2:]  # حذف دو پیام قدیمی‌تر
+    
+    # افزودن پیام جدید
+    conv['history'].append({
+        'role': role,  # 'user' یا 'bot'
+        'content': content,
+        'command': command,  # دستور مرتبط (اگر وجود داشته باشد)
+        'timestamp': time.time()
+    })
+    
+    # اگر این یک دستور جدید است، آن را به عنوان آخرین دستور ذخیره کنیم
+    if command and role == 'user':
+        conv['last_command'] = command
+
+async def send_long_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, max_length: int = 3800, **kwargs):
+    """
+    تقسیم پیام‌های طولانی به چند پیام کوچکتر و ارسال آنها با تأخیر کوتاه
+    
+    Args:
+        update: آبجکت آپدیت تلگرام
+        context: کانتکست تلگرام
+        text: متن کامل پیام
+        max_length: حداکثر طول هر پیام (پیش‌فرض: 3800 کاراکتر - کمتر از محدودیت تلگرام)
+        **kwargs: پارامترهای اضافی برای ارسال پیام (مانند disable_web_page_preview)
+    """
+    # اگر متن کوتاه است، مستقیماً ارسال کنیم
+    if len(text) <= max_length:
+        return await update.message.reply_text(text, **kwargs)
+    
+    # تقسیم متن به بخش‌های کوچکتر
+    parts = []
+    remaining_text = text
+    
+    while remaining_text:
+        if len(remaining_text) <= max_length:
+            parts.append(remaining_text)
+            break
+        
+        # یافتن نقطه مناسب برای برش متن
+        cut_point = remaining_text[:max_length].rfind('\n\n')
+        if cut_point == -1 or cut_point < max_length // 2:  # اگر نقطه خیلی نزدیک به ابتدا باشد
+            cut_point = remaining_text[:max_length].rfind('\n')
+        if cut_point == -1 or cut_point < max_length // 2:
+            cut_point = remaining_text[:max_length].rfind('. ')
+        if cut_point == -1 or cut_point < max_length // 2:
+            cut_point = remaining_text[:max_length].rfind(' ')
+        if cut_point == -1 or cut_point < max_length // 2:
+            cut_point = max_length - 1  # اگر هیچ نقطه مناسبی پیدا نشد
+        
+        parts.append(remaining_text[:cut_point+1])
+        remaining_text = remaining_text[cut_point+1:]
+    
+    # ارسال هر بخش با تأخیر کوتاه
+    total_parts = len(parts)
+    for i, part in enumerate(parts):
+        part_text = f"{part}\n\n"
+        if total_parts > 1:
+            part_text += f"(بخش {i+1} از {total_parts})"
+        
+        try:
+            await update.message.reply_text(part_text, **kwargs)
+            if i < total_parts - 1:
+                # تأخیر کوتاه بین ارسال پیام‌ها برای جلوگیری از محدودیت‌های تلگرام
+                await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"خطا در ارسال بخش {i+1}/{total_parts} پیام: {e}")
+            # تلاش مجدد با تأخیر بیشتر
+            try:
+                await asyncio.sleep(1)
+                await update.message.reply_text(f"ادامه پیام (بخش {i+1} از {total_parts}):\n\n{part}", **kwargs)
+            except Exception as e2:
+                logger.error(f"خطای مجدد در ارسال بخش {i+1}/{total_parts} پیام: {e2}")
+                await update.message.reply_text(f"❌ بخشی از پیام به دلیل خطای فنی ارسال نشد. لطفاً دوباره تلاش کنید.")
+                break
+            return context.user_data['conversations']
+
+def add_to_history(user_id, context, role, content, command=None):
+    """افزودن یک پیام به تاریخچه مکالمات کاربر"""
+    conv = initialize_user_history(user_id, context)
+    
+    # محدود کردن تعداد پیام‌های ذخیره شده (برای جلوگیری از مصرف زیاد حافظه)
+    MAX_HISTORY = 20
+    if len(conv['history']) >= MAX_HISTORY:
+        conv['history'] = conv['history'][2:]  # حذف دو پیام قدیمی‌تر
+    
+    # افزودن پیام جدید
+    conv['history'].append({
+        'role': role,  # 'user' یا 'bot'
+        'content': content,
+        'command': command,  # دستور مرتبط (اگر وجود داشته باشد)
+        'timestamp': time.time()
+    })
+    
+    # اگر این یک دستور جدید است، آن را به عنوان آخرین دستور ذخیره کنیم
+    if command and role == 'user':
+        conv['last_command'] = command
+
+async def split_and_send_messages(update: Update, text: str, chunk_size: int = 1000):
+    """
+    تقسیم پیام به بخش‌های کوچک و ارسال آنها
+    
+    Args:
+        update: آبجکت آپدیت تلگرام
+        text: متن کامل پیام
+        chunk_size: حداکثر اندازه هر بخش (پیش‌فرض: 1000 کاراکتر)
+    """
+    # تقسیم متن به بخش‌های کوچک
+    chunks = []
+    for i in range(0, len(text), chunk_size):
+        chunks.append(text[i:i + chunk_size])
+    
+    # ارسال هر بخش
+    for i, chunk in enumerate(chunks):
+        message = f"{chunk}"
+        if len(chunks) > 1:
+            message += f"\n\n[بخش {i+1} از {len(chunks)}]"
+        
+        await update.message.reply_text(message)
+        # تأخیر کوتاه بین پیام‌ها
+        if i < len(chunks) - 1:
+            await asyncio.sleep(0.3)
 
 # --- PDF Processing ---
 def process_pdf(pdf_bytes: BytesIO) -> dict:
@@ -87,62 +228,130 @@ def process_pdf(pdf_bytes: BytesIO) -> dict:
     try:
         # Text extraction
         reader = PdfReader(pdf_bytes)
-        text = " ".join([page.extract_text() or "" for page in reader.pages[:MAX_PDF_PAGES]])
         
-        # Table extraction
-        tables = tabula.read_pdf(
-            pdf_bytes, 
-            pages=f"1-{min(MAX_PDF_PAGES, len(reader.pages))}",
-            multiple_tables=True,
-            pandas_options={'header': None}
-        )
-        tables_md = "\n\n".join([df.to_markdown() for df in tables if not df.empty])
+        # محدود کردن تعداد صفحات برای جلوگیری از مشکلات حافظه
+        max_pages = min(MAX_PDF_PAGES, len(reader.pages))
+        
+        # استخراج متن با روش بهتر
+        all_text = []
+        for i in range(max_pages):
+            page = reader.pages[i]
+            text = page.extract_text() or ""
+            all_text.append(f"--- صفحه {i+1} ---\n{text}")
+        
+        text = "\n\n".join(all_text)
+        
+        # استخراج جداول با مدیریت خطا
+        tables = []
+        try:
+            # استفاده از tabula برای استخراج جداول
+            pdf_bytes.seek(0)  # بازگشت به ابتدای فایل
+            extracted_tables = tabula.read_pdf(
+                pdf_bytes, 
+                pages=f"1-{max_pages}",
+                multiple_tables=True,
+                guess=True,  # حدس زدن ساختار جدول
+                pandas_options={'header': None}
+            )
+            
+            # تبدیل جداول به متن
+            for i, df in enumerate(extracted_tables):
+                if not df.empty:
+                    tables.append(f"--- جدول {i+1} ---\n{df.to_string(index=False)}")
+            
+        except Exception as table_error:
+            logger.warning(f"خطا در استخراج جداول: {table_error}")
+            tables.append("خطا در استخراج جداول. ممکن است فایل PDF حاوی جداول قابل استخراج نباشد.")
+        
+        tables_text = "\n\n".join(tables)
+        
+        # محدود کردن طول متن برای API
+        if len(text) > MAX_TEXT_LENGTH:
+            text = text[:MAX_TEXT_LENGTH] + "... (متن ادامه دارد)"
+        
+        if len(tables_text) > MAX_TEXT_LENGTH:
+            tables_text = tables_text[:MAX_TEXT_LENGTH] + "... (جداول ادامه دارد)"
         
         return {
-            "text": text[:MAX_TEXT_LENGTH],
-            "tables": tables_md[:MAX_TEXT_LENGTH]
+            "text": text,
+            "tables": tables_text,
+            "page_count": max_pages,
+            "total_pages": len(reader.pages)
         }
     except Exception as e:
         logger.error(f"PDF processing error: {e}")
         return {"error": str(e)}
+
 # --- Excel Processing ---
 def process_excel(excel_bytes: BytesIO) -> dict:
-    """Extract data from Excel files with error handling"""
-    MAX_EXCEL_ROWS = 1000  # Define reasonable limit for rows to process
+    """Extract data from Excel files with improved error handling"""
+    MAX_EXCEL_ROWS = 1000  # محدودیت تعداد سطرها
+    MAX_EXCEL_COLS = 20    # محدودیت تعداد ستون‌ها
     
     try:
-        # Read Excel file
-        df_dict = pd.read_excel(excel_bytes, sheet_name=None)
+        # خواندن فایل اکسل
+        excel_bytes.seek(0)  # اطمینان از اینکه در ابتدای فایل هستیم
+        
+        # سعی در خواندن با openpyxl
+        try:
+            df_dict = pd.read_excel(excel_bytes, sheet_name=None, engine='openpyxl')
+        except Exception as openpyxl_error:
+            # اگر با openpyxl نشد، با xlrd امتحان کنیم
+            logger.warning(f"خطا در خواندن با openpyxl: {openpyxl_error}")
+            excel_bytes.seek(0)
+            df_dict = pd.read_excel(excel_bytes, sheet_name=None, engine='xlrd')
         
         results = {}
         
-        # Process each sheet
+        # پردازش هر شیت
         for sheet_name, df in df_dict.items():
-            # Limit rows for processing
-            df = df.head(MAX_EXCEL_ROWS)
+            # محدود کردن تعداد سطرها و ستون‌ها
+            if len(df) > MAX_EXCEL_ROWS:
+                df = df.head(MAX_EXCEL_ROWS)
+                logger.info(f"تعداد سطرهای شیت {sheet_name} به {MAX_EXCEL_ROWS} محدود شد")
             
-            # Basic statistics
+            if len(df.columns) > MAX_EXCEL_COLS:
+                df = df.iloc[:, :MAX_EXCEL_COLS]
+                logger.info(f"تعداد ستون‌های شیت {sheet_name} به {MAX_EXCEL_COLS} محدود شد")
+            
+            # حذف ستون‌های خالی
+            df = df.dropna(axis=1, how='all')
+            
+            # آمار توصیفی برای ستون‌های عددی
             numeric_cols = df.select_dtypes(include=[np.number]).columns
             if len(numeric_cols) > 0:
-                stats = df[numeric_cols].describe().to_markdown()
+                stats = df[numeric_cols].describe().to_string()
             else:
-                stats = "No numeric data found for statistics"
+                stats = "داده‌های عددی برای تحلیل آماری یافت نشد"
             
-            # Convert to markdown for better display
-            table_md = df.to_markdown(index=False)
+            # تبدیل به متن برای نمایش بهتر
+            try:
+                table_str = df.to_string(index=False)
+            except Exception:
+                # اگر به string تبدیل نشد، از روش دیگری استفاده کنیم
+                table_str = str(df.values.tolist())
             
-            # Generate summary
+            # ساخت خلاصه
             summary = {
                 "rows": len(df),
                 "columns": len(df.columns),
                 "column_names": df.columns.tolist(),
                 "missing_values": df.isna().sum().to_dict(),
+                "data_types": {col: str(dtype) for col, dtype in df.dtypes.items()}
             }
+            
+            # شناسایی ستون‌های مهم مالی
+            financial_cols = []
+            for col in df.columns:
+                col_str = str(col).lower()
+                if any(term in col_str for term in ['price', 'cost', 'revenue', 'income', 'expense', 'profit', 'loss', 'قیمت', 'درآمد', 'هزینه', 'سود', 'زیان']):
+                    financial_cols.append(col)
             
             results[sheet_name] = {
                 "summary": summary,
                 "statistics": stats,
-                "table": table_md[:MAX_TEXT_LENGTH]
+                "table": table_str[:MAX_TEXT_LENGTH],
+                "financial_columns": financial_cols
             }
         
         return {
@@ -153,10 +362,12 @@ def process_excel(excel_bytes: BytesIO) -> dict:
     except Exception as e:
         logger.error(f"Excel processing error: {e}")
         return {"error": str(e)}
+
 # --- AI Integration ---
 # کش با زمان انقضا برای پاسخ‌های AI
 ai_cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL)
 
+@cached(cache=ai_cache)
 @cached(cache=ai_cache)
 def query_deepseek(prompt: str, use_reasoner: bool = False) -> str:
     """Get AI response with TTL caching and improved error handling"""
@@ -168,11 +379,15 @@ def query_deepseek(prompt: str, use_reasoner: bool = False) -> str:
     # انتخاب مدل بر اساس پیچیدگی درخواست
     model = "deepseek-chat" # همیشه از مدل deepseek-chat استفاده کنیم
     
+    # محدود کردن طول پرامپت برای جلوگیری از خطا
+    if len(prompt) > 8000:
+        prompt = prompt[:8000] + "... (متن ادامه دارد)"
+    
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3,
-        "max_tokens": 500
+        "max_tokens": 2000  # افزایش طول پاسخ برای تحلیل‌های پیچیده
     }
     
     # تعداد تلاش‌های مجدد
@@ -183,16 +398,43 @@ def query_deepseek(prompt: str, use_reasoner: bool = False) -> str:
             # افزایش timeout به 60 ثانیه
             response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)
             response.raise_for_status()
-            return response.json()['choices'][0]['message']['content']
-        except Exception as e:
-            logger.error(f"API Error (attempt {retry+1}/{max_retries}): {e}")
+            
+            # بررسی پاسخ API
+            response_json = response.json()
+            if 'choices' in response_json and len(response_json['choices']) > 0:
+                return response_json['choices'][0]['message']['content']
+            else:
+                logger.error(f"API response format error: {response_json}")
+                return "⚠ خطا در فرمت پاسخ API. لطفاً دوباره تلاش کنید."
+                
+        except requests.exceptions.Timeout:
+            logger.error(f"API timeout (attempt {retry+1}/{max_retries})")
             if retry < max_retries - 1:
-                # انتظار قبل از تلاش مجدد
-                wait_time = 3 * (retry + 1)  # 3, 6, 9 ثانیه
+                wait_time = 5 * (retry + 1)
                 logger.info(f"Waiting {wait_time} seconds before retry...")
                 time.sleep(wait_time)
             else:
-                return "⚠ خطا در ارتباط با سرور هوش مصنوعی. لطفاً دوباره تلاش کنید."
+                return "⚠ زمان پاسخگویی سرور هوش مصنوعی به پایان رسید. لطفاً دوباره تلاش کنید."
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API Request Error (attempt {retry+1}/{max_retries}): {e}")
+            if retry < max_retries - 1:
+                wait_time = 3 * (retry + 1)
+                logger.info(f"Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+            else:
+                return f"⚠ خطا در ارتباط با سرور هوش مصنوعی: {str(e)}. لطفاً دوباره تلاش کنید."
+                
+        except Exception as e:
+            logger.error(f"Unexpected API Error (attempt {retry+1}/{max_retries}): {e}")
+            if retry < max_retries - 1:
+                wait_time = 3 * (retry + 1)
+                logger.info(f"Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+            else:
+                return f"⚠ خطای غیرمنتظره: {str(e)}. لطفاً دوباره تلاش کنید."
+    
+    return "⚠ خطا در ارتباط با سرور هوش مصنوعی پس از چندین تلاش. لطفاً بعداً دوباره تلاش کنید."
 
 
     # --- Financial API Integration ---
@@ -462,26 +704,46 @@ def get_codal_reports(symbol: str) -> list:
         "reports": reports
     }
 
-# --- Telegram Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Initiate conversation with knowledge level selection"""
+    user_id = update.effective_user.id
+    
+    # ایجاد تاریخچه جدید برای کاربر
+    initialize_user_history(user_id, context)
+    
+    # افزودن به تاریخچه
+    add_to_history(user_id, context, 'user', "/start", command="start")
+    
     keyboard = [
         [InlineKeyboardButton("مبتدی", callback_data="level_beginner"),
          InlineKeyboardButton("متوسط", callback_data="level_intermediate"),
          InlineKeyboardButton("حرفه‌ای", callback_data="level_pro")]
     ]
+    
+    start_message = "🎯 لطفاً سطح دانش مالی خود را انتخاب کنید:"
+    
+    # افزودن پاسخ ربات به تاریخچه
+    add_to_history(user_id, context, 'bot', start_message, command="start")
+    
     await update.message.reply_text(
-        "🎯 لطفاً سطح دانش مالی خود را انتخاب کنید:",
+        start_message,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
 
 async def set_knowledge_level(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle knowledge level selection"""
     query = update.callback_query
     await query.answer()
     
+    user_id = update.effective_user.id
     level = query.data.split("_")[1]
-    context.user_data["knowledge_level"] = level
+    
+    # دریافت تاریخچه کاربر
+    conv = initialize_user_history(user_id, context)
+    
+    # ذخیره سطح دانش در تاریخچه
+    conv['knowledge_level'] = level
     
     # تغییر فرمت پیام برای جلوگیری از خطای پارس کردن
     level_names = {
@@ -502,31 +764,70 @@ async def set_knowledge_level(update: Update, context: ContextTypes.DEFAULT_TYPE
     message_text += "• /iran_stock [نماد] - تحلیل سهام بورس ایران (مثال: /iran_stock خودرو)\n"
     message_text += "• /codal [نماد] - گزارش‌های کدال"
     
+    # افزودن پاسخ ربات به تاریخچه
+    add_to_history(user_id, context, 'bot', message_text, command="start")
+    
     await query.edit_message_text(message_text)
 
-
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Process text queries with level-appropriate responses"""
+    """Process text queries with level-appropriate responses and conversation history"""
     user_input = update.message.text
     user_id = update.effective_user.id
     
-    # Get user's knowledge level
-    level = context.user_data.get("knowledge_level", "beginner")
+    # افزودن پیام کاربر به تاریخچه
+    add_to_history(user_id, context, 'user', user_input)
     
-    # Create level-specific prompt
+    # دریافت تاریخچه اخیر
+    recent_history = get_recent_history(user_id, context, limit=5)
+    
+    # دریافت سطح دانش کاربر
+    conv = initialize_user_history(user_id, context)
+    level = conv.get('knowledge_level', 'beginner')
+    
+    # دریافت زمینه آخرین مکالمه
+    last_context = get_last_context(user_id, context)
+    
+    # ساخت پرامپت با توجه به سطح دانش
     prompt_templates = {
         "beginner": "به زبان ساده و با مثال ملموس توضیح دهید:",
         "intermediate": "با ذکر اصطلاحات تخصصی ولی قابل فهم توضیح دهید:",
         "pro": "با جزئیات فنی کامل و فرمول‌های مرتبط پاسخ دهید:"
     }
     
+    # ساخت تاریخچه مکالمه برای ارسال به هوش مصنوعی
+    conversation_history = ""
+    if recent_history:
+        conversation_history = "تاریخچه مکالمات اخیر:\n"
+        for item in recent_history:
+            if item['role'] == 'user':
+                conversation_history += f"کاربر: {item['message']}\n"
+            else:
+                # فقط بخش کوتاهی از پاسخ‌های قبلی ربات را اضافه کنیم
+                bot_msg = item['message']
+                if len(bot_msg) > 200:
+                    bot_msg = bot_msg[:200] + "..."
+                conversation_history += f"ربات: {bot_msg}\n"
+    
+    # اضافه کردن اطلاعات زمینه‌ای
+    context_info = ""
+    if last_context:
+        if last_context.get('type') == 'pdf_analysis':
+            context_info = f"اطلاعات زمینه‌ای: کاربر اخیراً فایل PDF با نام {last_context.get('file_name')} را آپلود کرده است.\n"
+        elif last_context.get('type') == 'excel_analysis':
+            context_info = f"اطلاعات زمینه‌ای: کاربر اخیراً فایل اکسل با نام {last_context.get('file_name')} را آپلود کرده است.\n"
+    
     base_prompt = f"""
     به عنوان تحلیلگر مالی سطح {level} به این سوال پاسخ دهید:
-    سوال: {user_input}
+    
+    {context_info}
+    {conversation_history}
+    
+    سوال کاربر: {user_input}
+    
     {prompt_templates[level]}
     """
     
-    # Normalize for caching
+    # نرمال‌سازی برای کش
     clean_prompt = normalize_prompt(base_prompt)
     
     # تعیین استفاده از مدل Reasoner بر اساس سطح دانش کاربر یا محتوای سوال
@@ -536,66 +837,51 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif any(keyword in user_input.lower() for keyword in ["تحلیل مالی", "نسبت مالی", "صورت مالی", "سرمایه‌گذاری"]):
         use_reasoner = True
     
-    # Get cached or new response with appropriate model
+    # ارسال به کاربر که در حال پردازش است
+    await update.message.reply_text("🧠 در حال تحلیل سوال شما...")
+    
+    # دریافت پاسخ از هوش مصنوعی
     response = query_deepseek(clean_prompt, use_reasoner=use_reasoner)
     
-    # Send response and request feedback
-    await update.message.reply_text(
-        f"📊 پاسخ تحلیلگر:\n\n{response}",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("👍 مفید بود", callback_data="feedback_good"),
-            InlineKeyboardButton("👎 مفید نبود", callback_data="feedback_bad")
-        ]])
-    )
-
-
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Process PDF and Excel financial documents"""
-    document = update.message.document
-    file_name = document.file_name.lower()
+    # ارسال پاسخ و درخواست بازخورد
+    response_text = f"📊 پاسخ تحلیلگر:\n\n{response}"
     
-    # Check file type
-    if file_name.endswith('.pdf'):
-        try:
-            # Download and process PDF
-            await update.message.reply_text("⏳ در حال پردازش فایل PDF...")
-            file = await context.bot.get_file(document.file_id)
-            pdf_bytes = BytesIO(await file.download_as_bytearray())
-            processed = process_pdf(pdf_bytes)
-            
-            if "error" in processed:
-                raise Exception(processed["error"])
-            
-            # Create analysis prompt
-            prompt = f"""
-            تحلیل صورت مالی زیر را انجام دهید:
-            متن اصلی: {processed['text']}
-            جداول: {processed['tables']}
-            
-            موارد تحلیل:
-            1- نقاط قوت/ضعف مالی
-            2- نسبت‌های کلیدی
-            3- پیشنهادات سرمایه‌گذاری
-            """
-            
-            # Get and send response
-            response = query_deepseek(normalize_prompt(prompt), use_reasoner=True)
-            await update.message.reply_text(f"📈 تحلیل صورت مالی:\n\n{response}")
-            
-        except Exception as e:
-            logger.error(f"PDF Error: {e}")
-            await update.message.reply_text(f"❌ خطا در پردازش سند PDF: {str(e)}")
+    # افزودن پاسخ ربات به تاریخچه
+    add_to_history(user_id, context, 'bot', response_text)
     
-    elif file_name.endswith(('.xls', '.xlsx', '.xlsm')):
-        await handle_excel(update, context)
-    
+    # ارسال پاسخ به کاربر
+    if len(response_text) > 4000:
+        # تقسیم پیام‌های طولانی
+        parts = [response_text[i:i+4000] for i in range(0, len(response_text), 4000)]
+        for i, part in enumerate(parts):
+            if i == len(parts) - 1:  # فقط برای آخرین بخش دکمه‌های بازخورد را اضافه کنیم
+                await update.message.reply_text(
+                    f"{part}",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("👍 مفید بود", callback_data="feedback_good"),
+                        InlineKeyboardButton("👎 مفید نبود", callback_data="feedback_bad")
+                    ]])
+                )
+            else:
+                await update.message.reply_text(f"{part}\n\n(بخش {i+1}/{len(parts)})")
+            await asyncio.sleep(0.5)  # تأخیر کوتاه بین پیام‌ها
     else:
-        await update.message.reply_text("❌ فرمت فایل پشتیبانی نمی‌شود. لطفاً فایل PDF یا Excel ارسال کنید.")
+        await update.message.reply_text(
+            response_text,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("👍 مفید بود", callback_data="feedback_good"),
+                InlineKeyboardButton("👎 مفید نبود", callback_data="feedback_bad")
+            ]])
+        )
 
 async def handle_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Process Excel financial data"""
+    user_id = update.effective_user.id
+    
     if not update.message.document.file_name.endswith(('.xls', '.xlsx', '.xlsm')):
-        await update.message.reply_text("❌ لطفاً فقط فایل اکسل ارسال کنید.")
+        error_msg = "❌ لطفاً فقط فایل اکسل ارسال کنید."
+        add_to_history(user_id, context, 'bot', error_msg, command="document")
+        await update.message.reply_text(error_msg)
         return
     
     try:
@@ -640,36 +926,148 @@ async def handle_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Get and send response
         response = query_deepseek(normalize_prompt(prompt), use_reasoner=True)
-        await update.message.reply_text(f"📊 تحلیل داده‌های اکسل:\n\n{response}")
+        analysis_text = f"📊 تحلیل داده‌های اکسل:\n\n{response}"
+        
+        # ذخیره در تاریخچه
+        conv = initialize_user_history(user_id, context)
+        conv['last_context'] = {
+            'type': 'excel_analysis',
+            'file_name': update.message.document.file_name,
+            'sheets': processed["sheets"],
+            'analysis': response
+        }
+        
+        # افزودن پاسخ ربات به تاریخچه
+        add_to_history(user_id, context, 'bot', analysis_text, command="document")
+        
+        await update.message.reply_text(analysis_text)
         
     except Exception as e:
         logger.error(f"Excel Error: {e}")
-        await update.message.reply_text(f"❌ خطا در پردازش فایل اکسل: {str(e)}")
+        error_msg = f"❌ خطا در پردازش فایل اکسل: {str(e)}"
+        add_to_history(user_id, context, 'bot', error_msg, command="document")
+        await update.message.reply_text(error_msg)
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process PDF and Excel financial documents"""
+    document = update.message.document
+    file_name = document.file_name.lower()
+    user_id = update.effective_user.id
+    
+    # افزودن به تاریخچه کاربر
+    add_to_history(user_id, context, 'user', f"فایل {file_name} را ارسال کردم", command="document")
+    
+    # Check file type
+    if file_name.endswith('.pdf'):
+        try:
+            # Download and process PDF
+            await update.message.reply_text("⏳ در حال پردازش فایل PDF...")
+            file = await context.bot.get_file(document.file_id)
+            pdf_bytes = BytesIO(await file.download_as_bytearray())
+            processed = process_pdf(pdf_bytes)
+            
+            if "error" in processed:
+                raise Exception(processed["error"])
+            
+            # Create analysis prompt
+            prompt = f"""
+            تحلیل صورت مالی زیر را انجام دهید:
+            متن اصلی: {processed['text']}
+            جداول: {processed['tables']}
+            
+            موارد تحلیل:
+            1- نقاط قوت/ضعف مالی
+            2- نسبت‌های کلیدی
+            3- پیشنهادات سرمایه‌گذاری
+            """
+            
+            # Get and send response
+            await update.message.reply_text("🧠 در حال تحلیل اطلاعات مالی توسط هوش مصنوعی...")
+            response = query_deepseek(normalize_prompt(prompt), use_reasoner=True)
+            analysis_text = f"📈 تحلیل صورت مالی:\n\n{response}"
+            
+            # ذخیره در تاریخچه کاربر
+            conv = initialize_user_history(user_id, context)
+            conv['last_context'] = {
+                'type': 'pdf_analysis',
+                'file_name': file_name,
+                'analysis': response
+            }
+            
+            # افزودن پاسخ ربات به تاریخچه
+            add_to_history(user_id, context, 'bot', analysis_text, command="document")
+            
+            # ارسال پاسخ به کاربر (با پشتیبانی از پیام‌های طولانی)
+            if len(analysis_text) > 4000:
+                parts = [analysis_text[i:i+4000] for i in range(0, len(analysis_text), 4000)]
+                for i, part in enumerate(parts):
+                    await update.message.reply_text(f"{part}\n\n(بخش {i+1}/{len(parts)})")
+            else:
+                await update.message.reply_text(analysis_text)
+            
+        except Exception as e:
+            logger.error(f"PDF Error: {e}")
+            error_msg = f"❌ خطا در پردازش سند PDF: {str(e)}"
+            add_to_history(user_id, context, 'bot', error_msg, command="document")
+            await update.message.reply_text(error_msg)
+    
+    elif file_name.endswith(('.xls', '.xlsx', '.xlsm')):
+        await handle_excel(update, context)
+    
+    else:
+        error_msg = "❌ فرمت فایل پشتیبانی نمی‌شود. لطفاً فایل PDF یا Excel ارسال کنید."
+        add_to_history(user_id, context, 'bot', error_msg, command="document")
+        await update.message.reply_text(error_msg)
+
 
 async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Collect user feedback"""
     query = update.callback_query
     await query.answer()
     
+    user_id = update.effective_user.id
     feedback_type = query.data.split("_")[1]
     logger.info(f"Feedback received: {feedback_type}")
     
+    # ذخیره بازخورد در تاریخچه کاربر
+    conv = initialize_user_history(user_id, context)
+    if 'feedback' not in conv:
+        conv['feedback'] = []
+    
+    # اضافه کردن بازخورد به آخرین پیام ربات
+    if len(conv['history']) > 0:
+        for i in range(len(conv['history'])-1, -1, -1):
+            if conv['history'][i]['role'] == 'bot':
+                conv['feedback'].append({
+                    'message_index': i,
+                    'feedback': feedback_type,
+                    'timestamp': time.time()
+                })
+                break
+    
     # Store feedback (can be extended to database)
     with open("feedback.log", "a") as f:
-        f.write(f"{time.time()},{feedback_type}\n")
+        f.write(f"{time.time()},{user_id},{feedback_type}\n")
     
     await query.edit_message_text("🙏 از بازخورد شما متشکریم!")
 
+
 async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fetch and send financial news"""
+    user_id = update.effective_user.id
     keywords = " ".join(context.args) if context.args else ""
+    
+    # افزودن دستور به تاریخچه
+    add_to_history(user_id, context, 'user', f"اخبار مالی {keywords} را می‌خواهم", command="news")
     
     await update.message.reply_text("⏳ در حال دریافت اخبار مالی...")
     
     news = get_financial_news(keywords)
     
     if not news or "error" in news[0]["title"]:
-        await update.message.reply_text("❌ خطا در دریافت اخبار. لطفاً بعداً تلاش کنید.")
+        error_msg = "❌ خطا در دریافت اخبار. لطفاً بعداً تلاش کنید."
+        add_to_history(user_id, context, 'bot', error_msg, command="news")
+        await update.message.reply_text(error_msg)
         return
     
     # Format news without markdown
@@ -685,43 +1083,67 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         news_text += f"{item['summary']}\n"
         news_text += f"لینک خبر: {item['url']}\n\n"
     
-    await update.message.reply_text(news_text, disable_web_page_preview=True)
+    # ذخیره اطلاعات اخبار در تاریخچه کاربر
+    conv = initialize_user_history(user_id, context)
+    conv['last_context'] = {
+        'type': 'news',
+        'keywords': keywords,
+        'news_count': len(news),
+        'news_items': news[:3]  # ذخیره سه خبر اول برای مراجعه بعدی
+    }
+    
+    # افزودن پاسخ ربات به تاریخچه
+    add_to_history(user_id, context, 'bot', news_text, command="news")
+    
+    await split_and_send_messages(update, news_text)
 
 
 async def get_stock_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fetch and analyze stock information"""
+    user_id = update.effective_user.id
+    
     if not context.args:
         await update.message.reply_text("❌ لطفاً نماد سهام را وارد کنید. مثال: /stock AAPL")
         return
     
     symbol = context.args[0].upper()
+    
+    # افزودن دستور به تاریخچه
+    add_to_history(user_id, context, 'user', f"اطلاعات سهام {symbol} را می‌خواهم", command="stock")
+    
     await update.message.reply_text(f"⏳ در حال دریافت اطلاعات سهام {symbol}...")
     
     stock_data = get_stock_data(symbol)
     
     if "error" in stock_data:
-        await update.message.reply_text(f"❌ خطا: {stock_data['error']}")
+        error_msg = f"❌ خطا: {stock_data['error']}"
+        add_to_history(user_id, context, 'bot', error_msg)
+        await update.message.reply_text(error_msg)
         return
     
     # Format stock information
     profile = stock_data["profile"]
     ratios = stock_data["ratios"]
     
-    info_text = f"📈 اطلاعات سهام {symbol}\n\n"
-    info_text += f"{profile.get('companyName', 'N/A')}\n"
-    info_text += f"قیمت: ${profile.get('price', 'N/A')}\n"
-    info_text += f"تغییر: {profile.get('changes', 'N/A')} ({profile.get('changesPercentage', 'N/A')}%)\n"
-    info_text += f"صنعت: {profile.get('industry', 'N/A')}\n\n"
+    # اطلاعات اولیه سهام
+    basic_info = f"📈 اطلاعات سهام {symbol}\n\n"
+    basic_info += f"{profile.get('companyName', 'N/A')}\n"
+    basic_info += f"قیمت: ${profile.get('price', 'N/A')}\n"
+    basic_info += f"تغییر: {profile.get('changes', 'N/A')} ({profile.get('changesPercentage', 'N/A')}%)\n"
+    basic_info += f"صنعت: {profile.get('industry', 'N/A')}\n\n"
     
-    info_text += "نسبت‌های مالی:\n"
+    basic_info += "نسبت‌های مالی:\n"
     if ratios:
-        info_text += f"P/E: {ratios.get('priceEarningsRatio', 'N/A')}\n"
-        info_text += f"P/B: {ratios.get('priceToBookRatio', 'N/A')}\n"
-        info_text += f"ROE: {ratios.get('returnOnEquity', 'N/A')}\n"
-        info_text += f"ROA: {ratios.get('returnOnAssets', 'N/A')}\n"
-        info_text += f"Debt to Equity: {ratios.get('debtToEquity', 'N/A')}\n"
+        basic_info += f"P/E: {ratios.get('priceEarningsRatio', 'N/A')}\n"
+        basic_info += f"P/B: {ratios.get('priceToBookRatio', 'N/A')}\n"
+        basic_info += f"ROE: {ratios.get('returnOnEquity', 'N/A')}\n"
+        basic_info += f"ROA: {ratios.get('returnOnAssets', 'N/A')}\n"
+        basic_info += f"Debt to Equity: {ratios.get('debtToEquity', 'N/A')}\n"
     else:
-        info_text += "اطلاعات نسبت‌های مالی در دسترس نیست.\n"
+        basic_info += "اطلاعات نسبت‌های مالی در دسترس نیست.\n"
+    
+    # ارسال اطلاعات اولیه
+    await update.message.reply_text(basic_info)
     
     # Add analysis using AI
     analysis_prompt = f"""
@@ -744,13 +1166,32 @@ async def get_stock_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     
     analysis = query_deepseek(normalize_prompt(analysis_prompt), use_reasoner=True)
-    info_text += f"\nتحلیل هوشمند:\n{analysis}"
+    analysis_text = f"تحلیل هوشمند سهام {symbol}:\n\n{analysis}"
     
-    await update.message.reply_text(info_text)
-
+    # ذخیره اطلاعات سهام و تحلیل در تاریخچه کاربر
+    conv = initialize_user_history(user_id, context)
+    conv['last_context'] = {
+        'type': 'stock',
+        'symbol': symbol,
+        'name': profile.get('companyName', 'N/A'),
+        'price': profile.get('price', 'N/A'),
+        'industry': profile.get('industry', 'N/A'),
+        'analysis': analysis
+    }
+    
+    # افزودن پاسخ ربات به تاریخچه
+    add_to_history(user_id, context, 'bot', analysis_text, command="stock")
+    
+    # ارسال تحلیل هوشمند با تقسیم به بخش‌های کوچک
+    await split_and_send_messages(update, analysis_text)
 
 async def market_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Provide a summary of current market conditions"""
+    user_id = update.effective_user.id
+    
+    # افزودن دستور به تاریخچه
+    add_to_history(user_id, context, 'user', "خلاصه وضعیت بازار را می‌خواهم", command="market")
+    
     await update.message.reply_text("⏳ در حال تهیه خلاصه بازار...")
     
     try:
@@ -819,17 +1260,32 @@ async def market_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         market_analysis = query_deepseek(normalize_prompt(market_prompt), use_reasoner=True)
         summary_text += f"\nتحلیل بازار:\n{market_analysis}"
         
-        await update.message.reply_text(summary_text)
+        # ذخیره اطلاعات بازار در تاریخچه کاربر
+        conv = initialize_user_history(user_id, context)
+        conv['last_context'] = {
+            'type': 'market',
+            'indices': {name: data.get('profile', {}).get('changesPercentage', 'N/A') for name, data in indices_data.items()},
+            'gainers': [item.get('symbol', 'N/A') for item in gainers_data[:3]],
+            'losers': [item.get('symbol', 'N/A') for item in losers_data[:3]],
+            'analysis': market_analysis
+        }
+        
+        # افزودن پاسخ ربات به تاریخچه
+        add_to_history(user_id, context, 'bot', summary_text, command="market")
+        
+        await split_and_send_messages(update, summary_text)
         
     except Exception as e:
         logger.error(f"Market summary error: {e}")
-        await update.message.reply_text(f"❌ خطا در دریافت خلاصه بازار: {str(e)}")
-
-
-
+        error_msg = f"❌ خطا در دریافت خلاصه بازار: {str(e)}"
+        add_to_history(user_id, context, 'bot', error_msg, command="market")
+        await update.message.reply_text(error_msg)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Display help information"""
+    user_id = update.effective_user.id
+    add_to_history(user_id, context, 'user', "/help", command="help")
+    
     help_text = "🤖 راهنمای ربات تحلیل مالی\n\n"
     help_text += "دستورات اصلی:\n"
     help_text += "/start - شروع کار با ربات و انتخاب سطح دانش\n"
@@ -852,9 +1308,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text += "• دسترسی به گزارش‌های کدال\n\n"
     help_text += "برای استفاده از قابلیت تحلیل فایل، کافیست فایل PDF یا Excel خود را ارسال کنید.\n"
     help_text += "برای پرسش سوالات مالی، متن سوال خود را بنویسید."
-    
-    await update.message.reply_text(help_text)
-
+    add_to_history(user_id, context, 'bot', help_text, command="help")
+    await send_long_message(update, context, help_text)
 
 async def iran_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """نمایش وضعیت کلی بازار بورس ایران"""
@@ -876,7 +1331,7 @@ async def iran_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"🔴 نمادهای منفی: {market_data['negative_symbols']}\n"
         response += f"⚪ نمادهای بدون تغییر: {market_data['neutral_symbols']}\n"
         
-        await update.message.reply_text(response)
+        await send_long_message(update, context, response)
     except Exception as e:
         logger.error(f"خطا در اجرای دستور iran_market: {e}")
         await update.message.reply_text("❌ خطا در دریافت اطلاعات بازار. لطفاً بعداً تلاش کنید.")
@@ -932,7 +1387,7 @@ async def iran_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         analysis = query_deepseek(normalize_prompt(analysis_prompt), use_reasoner=True)
         response += f"\nتحلیل هوشمند:\n{analysis}"
         
-        await update.message.reply_text(response)
+        await send_long_message(update, context, response)
     except Exception as e:
         logger.error(f"خطا در اجرای دستور iran_stock: {e}")
         await update.message.reply_text("❌ خطا در دریافت اطلاعات سهام. لطفاً بعداً تلاش کنید.")
@@ -959,7 +1414,7 @@ async def codal_reports_command(update: Update, context: ContextTypes.DEFAULT_TY
             response += f"{i}. {report['date']} - {report['title']} ({report['category']})\n"
             response += f"   لینک گزارش: {report['url']}\n"
         
-        await update.message.reply_text(response)
+            await send_long_message(update, context, response)
     except Exception as e:
         logger.error(f"خطا در اجرای دستور codal: {e}")
         await update.message.reply_text("❌ خطا در دریافت گزارش‌های کدال. لطفاً بعداً تلاش کنید.")
@@ -970,8 +1425,6 @@ def run_bot():
     """Configure and run the bot"""
     try:
         print(f"Attempting to create bot with token: {TELEGRAM_TOKEN[:5]}...")
-        
-        # تست اتصال به دیپ‌سیک
         
         application = Application.builder().token(TELEGRAM_TOKEN).build()
         
@@ -1009,7 +1462,9 @@ def run_bot():
         application.run_polling()
     except Exception as e:
         print(f"Error starting bot: {e}")
+        traceback.print_exc()  # چاپ جزئیات خطا
         sys.exit(1)
+
 
 if __name__ == "__main__":    run_bot()
  
