@@ -10,7 +10,7 @@ yfinance
 langdetect
 openpyxl
 cachetools
-xlrd=2.0.1
+xlrd==2.0.1
 jpype1==1.4.1
 python-dotenv==1.0.0
 openjdk==11.0.1 
