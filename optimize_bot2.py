@@ -114,6 +114,51 @@ def add_to_history(user_id, context, role, content, command=None):
     if command and role == 'user':
         conv['last_command'] = command
 
+def get_recent_history(user_id, context, limit=5):
+    """
+    دریافت تاریخچه اخیر مکالمات کاربر
+    
+    Args:
+        user_id: شناسه کاربر
+        context: کانتکست تلگرام
+        limit: تعداد پیام‌های اخیر که باید برگردانده شود (پیش‌فرض: 5)
+    
+    Returns:
+        لیستی از پیام‌های اخیر با فرمت {'role': 'user'/'bot', 'message': 'متن پیام'}
+    """
+    conv = initialize_user_history(user_id, context)
+    
+    # دریافت تاریخچه اخیر
+    history = conv.get('history', [])
+    
+    # محدود کردن به تعداد مورد نظر
+    recent_history = history[-limit:] if len(history) > limit else history
+    
+    # تبدیل به فرمت مناسب
+    formatted_history = []
+    for item in recent_history:
+        formatted_history.append({
+            'role': item['role'],
+            'message': item['content']
+        })
+    
+    return formatted_history
+def get_last_context(user_id, context):
+    """
+    دریافت زمینه آخرین مکالمه کاربر
+    
+    Args:
+        user_id: شناسه کاربر
+        context: کانتکست تلگرام
+    
+    Returns:
+        دیکشنری حاوی اطلاعات زمینه‌ای آخرین مکالمه
+    """
+    conv = initialize_user_history(user_id, context)
+    return conv.get('last_context', {})
+
+        
+
 async def send_long_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, max_length: int = 3800, **kwargs):
     """
     تقسیم پیام‌های طولانی به چند پیام کوچکتر و ارسال آنها با تأخیر کوتاه
@@ -1467,4 +1512,5 @@ def run_bot():
 
 
 if __name__ == "__main__":    run_bot()
+ 
  
