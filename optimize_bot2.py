@@ -413,7 +413,6 @@ def process_excel(excel_bytes: BytesIO) -> dict:
 ai_cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL)
 
 @cached(cache=ai_cache)
-@cached(cache=ai_cache)
 def query_deepseek(prompt: str, use_reasoner: bool = False) -> str:
     """Get AI response with TTL caching and improved error handling"""
     headers = {
@@ -422,7 +421,7 @@ def query_deepseek(prompt: str, use_reasoner: bool = False) -> str:
     }
     
     # انتخاب مدل بر اساس پیچیدگی درخواست
-    model = "deepseek-chat" # همیشه از مدل deepseek-chat استفاده کنیم
+    model = "deepseek-reasoner" if use_reasoner else "deepseek-chat"
     
     # محدود کردن طول پرامپت برای جلوگیری از خطا
     if len(prompt) > 8000:
@@ -435,6 +434,8 @@ def query_deepseek(prompt: str, use_reasoner: bool = False) -> str:
         "max_tokens": 2000  # افزایش طول پاسخ برای تحلیل‌های پیچیده
     }
     
+    # بقیه کد...
+
     # تعداد تلاش‌های مجدد
     max_retries = 3
     
@@ -1512,5 +1513,4 @@ def run_bot():
 
 
 if __name__ == "__main__":    run_bot()
- 
  
