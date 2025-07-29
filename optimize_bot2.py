@@ -33,7 +33,7 @@ import traceback
 
 # --- Configuration ---
 # تنظیم مستقیم متغیرها بدون استفاده از فایل .env
-TELEGRAM_TOKEN = "7429551898:AAF0BnBcQwNmi7IRA3PPVNf-K-4On2JROgs"  # توکن تلگرام خود را اینجا قرار دهید
+TELEGRAM_TOKEN = "7429551898:AAGx-HLK7cYKiPAO8qbQc0Y_CTZJ-UA6yn0"  # توکن تلگرام خود را اینجا قرار دهید
 DEEPSEEK_API_KEY = "sk-033cc340ba3247f7931a64c5e3d77330"  # کلید API دیپ‌سیک خود را اینجا قرار دهید
 ALPHA_VANTAGE_API_KEY = "8RD7DN1R2W5AI9UT"  # کلید API آلفا ونتیج خود را اینجا قرار دهید
 FINANCIAL_MODELING_PREP_API_KEY = "jBxtfLbURIAQQnzoQlL1ywKM72hrbAZT"  # کلید API فایننشال مادلینگ پرپ خود را اینجا قرار دهید
