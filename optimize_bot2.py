@@ -521,30 +521,64 @@ def get_financial_news(keywords: str = "", limit: int = 10) -> list:
 
 @cached(cache=stock_cache)
 def get_stock_data(symbol: str) -> dict:
-    """Get stock data with TTL caching"""
+    """Get stock data using Alpha Vantage with enhanced info"""
     try:
-        # Get company profile
-        profile_url = f"{FMP_BASE_URL}/profile/{symbol}?apikey={FINANCIAL_MODELING_PREP_API_KEY}"
-        profile_response = requests.get(profile_url, timeout=10)
-        profile_response.raise_for_status()
-        profile_data = profile_response.json()
-        
-        if not profile_data or len(profile_data) == 0:
-            return {"error": "نماد یافت نشد"}
-        
-        # Get financial ratios
-        ratios_url = f"{FMP_BASE_URL}/ratios/{symbol}?limit=1&apikey={FINANCIAL_MODELING_PREP_API_KEY}"
-        ratios_response = requests.get(ratios_url, timeout=10)
-        ratios_response.raise_for_status()
-        ratios_data = ratios_response.json()
-        
-        # Combine data
-        result = {
-            "profile": profile_data[0],
-            "ratios": ratios_data[0] if ratios_data else {},
+        # دریافت قیمت لحظه‌ای
+        quote_params = {
+            "function": "GLOBAL_QUOTE",
+            "symbol": symbol,
+            "apikey": ALPHA_VANTAGE_API_KEY
         }
         
-        return result
+        quote_response = requests.get(ALPHA_VANTAGE_BASE_URL, params=quote_params, timeout=10)
+        quote_response.raise_for_status()
+        quote_data = quote_response.json()
+        
+        if "Global Quote" not in quote_data:
+            return {"error": "نماد یافت نشد"}
+        
+        quote = quote_data["Global Quote"]
+        
+        # دریافت اطلاعات شرکت (اگر در دسترس باشد)
+        overview_params = {
+            "function": "OVERVIEW",
+            "symbol": symbol,
+            "apikey": ALPHA_VANTAGE_API_KEY
+        }
+        
+        try:
+            overview_response = requests.get(ALPHA_VANTAGE_BASE_URL, params=overview_params, timeout=10)
+            overview_data = overview_response.json() if overview_response.status_code == 200 else {}
+        except:
+            overview_data = {}
+        
+        # ساخت ساختار داده
+        profile = {
+            "symbol": quote.get("01. symbol", symbol),
+            "companyName": overview_data.get("Name", "N/A"),
+            "price": quote.get("05. price", "N/A"),
+            "changes": quote.get("09. change", "N/A"),
+            "changesPercentage": quote.get("10. change percent", "N/A"),
+            "industry": overview_data.get("Industry", "N/A"),
+            "description": overview_data.get("Description", "N/A")[:200] + "..." if overview_data.get("Description") else "N/A",
+            "marketCap": overview_data.get("MarketCapitalization", "N/A")
+        }
+        
+        ratios = {
+            "priceEarningsRatio": overview_data.get("PERatio", "N/A"),
+            "priceToBookRatio": overview_data.get("PriceToBookRatio", "N/A"),
+            "returnOnEquity": overview_data.get("ReturnOnEquity", "N/A"),
+            "returnOnAssets": overview_data.get("ReturnOnAssets", "N/A"),
+            "debtToEquity": overview_data.get("DebtToEquity", "N/A"),
+            "profitMargin": overview_data.get("ProfitMargin", "N/A"),
+            "eps": overview_data.get("EPS", "N/A")
+        } if overview_data else {}
+        
+        return {
+            "profile": profile,
+            "ratios": ratios
+        }
+        
     except Exception as e:
         logger.error(f"Stock data API error: {e}")
         return {"error": str(e)}
@@ -1232,7 +1266,7 @@ async def get_stock_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await split_and_send_messages(update, analysis_text)
 
 async def market_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Provide a summary of current market conditions"""
+    """Provide a summary of current market conditions using Alpha Vantage"""
     user_id = update.effective_user.id
     
     # افزودن دستور به تاریخچه
@@ -1241,78 +1275,96 @@ async def market_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ در حال تهیه خلاصه بازار...")
     
     try:
-        # Get major indices data
-        indices = ["^GSPC", "^DJI", "^IXIC", "^FTSE", "^N225"]
-        indices_names = {
-            "^GSPC": "S&P 500",
-            "^DJI": "Dow Jones",
-            "^IXIC": "Nasdaq",
-            "^FTSE": "FTSE 100",
-            "^N225": "Nikkei 225"
+        # Get major indices data using Alpha Vantage
+        indices = {
+            "SPY": "S&P 500",
+            "DIA": "Dow Jones",
+            "QQQ": "Nasdaq", 
+            "VTI": "Total Stock Market",
+            "VEU": "All World Ex-US"
         }
         
         indices_data = {}
-        for idx in indices:
-            data = get_stock_data(idx)
+        for symbol, name in indices.items():
+            data = get_stock_data(symbol)
             if "error" not in data:
-                indices_data[indices_names.get(idx, idx)] = data
+                indices_data[name] = data
+
+        # Get sector performance using Alpha Vantage
+        sectors = {
+            "XLK": "تکنولوژی",
+            "XLV": "سلامتی", 
+            "XLE": "انرژی",
+            "XLF": "مالی",
+            "XLI": "صنعتی"
+        }
         
-        # Get top gainers and losers
-        gainers_url = f"{FMP_BASE_URL}/stock_market/gainers?apikey={FINANCIAL_MODELING_PREP_API_KEY}"
-        gainers_response = requests.get(gainers_url, timeout=10)
-        gainers_data = gainers_response.json()[:5]  # Top 5 gainers
-        
-        losers_url = f"{FMP_BASE_URL}/stock_market/losers?apikey={FINANCIAL_MODELING_PREP_API_KEY}"
-        losers_response = requests.get(losers_url, timeout=10)
-        losers_data = losers_response.json()[:5]  # Top 5 losers
-        
+        sectors_data = {}
+        for symbol, name in sectors.items():
+            data = get_stock_data(symbol)
+            if "error" not in data:
+                sectors_data[name] = data
+
         # Format market summary
-        summary_text = "🌐 خلاصه وضعیت بازار\n\n"
+        summary_text = "🌐 خلاصه وضعیت بازار (Alpha Vantage)\n\n"
         
         # Add indices
-        summary_text += "شاخص‌های اصلی:\n"
+        summary_text += "📊 شاخص‌های اصلی:\n"
         for name, data in indices_data.items():
             profile = data.get("profile", {})
-            summary_text += f"{name}: ${profile.get('price', 'N/A')} ({profile.get('changesPercentage', 'N/A')}%)\n"
+            price = profile.get('price', 'N/A')
+            change = profile.get('changes', 'N/A')
+            change_percent = profile.get('changesPercentage', 'N/A')
+            
+            # تعیین ایموجی بر اساس تغییرات
+            emoji = "🟢" if change and float(change.replace(',', '')) > 0 else "🔴" if change and float(change.replace(',', '')) < 0 else "⚪"
+            
+            summary_text += f"{emoji} {name}: ${price} ({change_percent})\n"
         
-        # Add gainers
-        summary_text += "\nبیشترین رشد:\n"
-        for item in gainers_data:
-            summary_text += f"{item.get('symbol', 'N/A')} ({item.get('companyName', 'N/A')}): "
-            summary_text += f"${item.get('price', 'N/A')} ({item.get('changesPercentage', 'N/A')}%)\n"
-        
-        # Add losers
-        summary_text += "\nبیشترین افت:\n"
-        for item in losers_data:
-            summary_text += f"{item.get('symbol', 'N/A')} ({item.get('companyName', 'N/A')}): "
-            summary_text += f"${item.get('price', 'N/A')} ({item.get('changesPercentage', 'N/A')}%)\n"
-        
+        # Add sector performance
+        summary_text += "\n🏭 عملکرد بخش‌ها:\n"
+        for name, data in sectors_data.items():
+            profile = data.get("profile", {})
+            change_percent = profile.get('changesPercentage', 'N/A')
+            
+            emoji = "🟢" if change_percent and '+' in change_percent else "🔴" if change_percent and '-' in change_percent else "⚪"
+            
+            summary_text += f"{emoji} {name}: {change_percent}\n"
+
+        # Get market news for additional context
+        try:
+            news_items = get_financial_news("market", limit=3)
+            if news_items and "error" not in news_items[0]["title"]:
+                summary_text += "\n📰 اخبار مهم بازار:\n"
+                for i, item in enumerate(news_items[:3], 1):
+                    sentiment_emoji = "🟢" if item["sentiment"] == "positive" else "🔴" if item["sentiment"] == "negative" else "⚪"
+                    summary_text += f"{i}. {item['title']} {sentiment_emoji}\n"
+        except Exception as news_error:
+            logger.warning(f"Error getting market news: {news_error}")
+
         # Get AI analysis of market conditions
         market_prompt = f"""
-        با توجه به داده‌های زیر، یک تحلیل کوتاه از وضعیت کلی بازار ارائه دهید:
+        با توجه به داده‌های زیر از بازارهای جهانی، یک تحلیل کوتاه و کاربردی ارائه دهید:
         
-        شاخص‌های اصلی:
-        {', '.join([f"{name}: {data.get('profile', {}).get('changesPercentage', 'N/A')}%" for name, data in indices_data.items()])}
+        وضعیت شاخص‌های اصلی:
+        {', '.join([f"{name}: {data.get('profile', {}).get('changesPercentage', 'N/A')}" for name, data in indices_data.items()])}
         
-        بیشترین رشد:
-        {', '.join([f"{item.get('symbol', 'N/A')}: {item.get('changesPercentage', 'N/A')}%" for item in gainers_data])}
-        
-        بیشترین افت:
-        {', '.join([f"{item.get('symbol', 'N/A')}: {item.get('changesPercentage', 'N/A')}%" for item in losers_data])}
+        عملکرد بخش‌های اقتصادی:
+        {', '.join([f"{name}: {data.get('profile', {}).get('changesPercentage', 'N/A')}" for name, data in sectors_data.items()])}
         
         لطفاً یک تحلیل کلی از روند بازار، بخش‌های قوی و ضعیف، و پیش‌بینی کوتاه‌مدت ارائه دهید.
+        تحلیل را به زبان ساده و برای سرمایه‌گذاران ایرانی بنویسید.
         """
         
         market_analysis = query_deepseek(normalize_prompt(market_prompt), use_reasoner=True)
-        summary_text += f"\nتحلیل بازار:\n{market_analysis}"
+        summary_text += f"\n🧠 تحلیل بازار:\n{market_analysis}"
         
         # ذخیره اطلاعات بازار در تاریخچه کاربر
         conv = initialize_user_history(user_id, context)
         conv['last_context'] = {
             'type': 'market',
             'indices': {name: data.get('profile', {}).get('changesPercentage', 'N/A') for name, data in indices_data.items()},
-            'gainers': [item.get('symbol', 'N/A') for item in gainers_data[:3]],
-            'losers': [item.get('symbol', 'N/A') for item in losers_data[:3]],
+            'sectors': {name: data.get('profile', {}).get('changesPercentage', 'N/A') for name, data in sectors_data.items()},
             'analysis': market_analysis
         }
         
@@ -1513,4 +1565,3 @@ def run_bot():
 
 
 if __name__ == "__main__":    run_bot()
- 
